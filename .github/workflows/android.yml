@@ -31,9 +31,10 @@ jobs:
         run: flutter clean
 
       # 🔥 ФИКС google_fonts (ключевой)
-      - name: Fix google_fonts version
+      - name: Fix dependencies
         run: |
           sed -i 's/google_fonts: .*/google_fonts: 4.0.4/' pubspec.yaml
+          sed -i 's/http: .*/http: 0.13.6/' pubspec.yaml
 
       - name: Get dependencies
         run: flutter pub get

@@ -9,12 +9,12 @@ jobs:
 
     steps:
       - name: Checkout v1.3.4
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: v1.3.4
 
       - name: Setup Java
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -30,11 +30,16 @@ jobs:
       - name: Clean project
         run: flutter clean
 
+      # 🔥 ФИКС google_fonts (ключевой)
+      - name: Fix google_fonts version
+        run: |
+          sed -i 's/google_fonts: .*/google_fonts: 4.0.4/' pubspec.yaml
+
       - name: Get dependencies
         run: flutter pub get
 
       - name: Build APK
-        run: flutter build apk --release
+        run: flutter build apk --release --no-tree-shake-icons
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

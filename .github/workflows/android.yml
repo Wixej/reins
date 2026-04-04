@@ -1,4 +1,4 @@
-name: Build Reins APK
+name: Build Reins APK (v1.3.4)
 
 on:
   workflow_dispatch:
@@ -8,8 +8,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout v1.3.4
         uses: actions/checkout@v3
+        with:
+          ref: v1.3.4
 
       - name: Setup Java
         uses: actions/setup-java@v3
@@ -22,10 +24,13 @@ jobs:
         with:
           flutter-version: '3.19.0'
 
+      - name: Flutter Doctor
+        run: flutter doctor
+
       - name: Clean project
         run: flutter clean
 
-      - name: Install dependencies
+      - name: Get dependencies
         run: flutter pub get
 
       - name: Build APK

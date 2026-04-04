@@ -1,4 +1,4 @@
-name: Build Reins APK (v1.3.4)
+name: Build Reins APK (v1.3.4 FIXED)
 
 on:
   workflow_dispatch:
@@ -19,22 +19,32 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Flutter (старый, совместимый)
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.13.0'
+          channel: stable
 
-      - name: Flutter Doctor
-        run: flutter doctor
-
-      - name: Clean project
+      - name: Clean
         run: flutter clean
+
+      # 🔥 Жёстко фиксируем всё сразу
+      - name: Fix dependencies
+        run: |
+          sed -i 's/environment:.*/environment:\n  sdk: ">=3.0.0 <4.0.0"/' pubspec.yaml
+          sed -i 's/google_fonts: .*/google_fonts: 6.1.0/' pubspec.yaml
+          sed -i 's/http: .*/http: 1.2.2/' pubspec.yaml
+          sed -i 's/flutter_svg: .*/flutter_svg: 2.0.10/' pubspec.yaml
+
+      # 🔥 фикс кода под новые пакеты
+      - name: Fix code
+        run: |
+          grep -rl "kodeMono" lib | xargs sed -i 's/kodeMono/robotoMono/g' || true
 
       - name: Get dependencies
         run: flutter pub get
 
       - name: Build APK
-        run: flutter build apk --release
+        run: flutter build apk --release --no-tree-shake-icons
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

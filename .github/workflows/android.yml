@@ -33,11 +33,10 @@ jobs:
       # 🔥 ФИКС google_fonts (ключевой)
       - name: Fix dependencies
         run: |
-          sed -i 's/google_fonts: .*/google_fonts: 4.0.4/' pubspec.yaml
+          sed -i 's/google_fonts: .*/google_fonts: 3.0.1/' pubspec.yaml
           sed -i 's/http: .*/http: 0.13.6/' pubspec.yaml
           sed -i 's/flutter_svg: .*/flutter_svg: 2.0.9/' pubspec.yaml
           grep -rl "kodeMono" lib | xargs sed -i 's/kodeMono/robotoMono/g'
-
       - name: Get dependencies
         run: flutter pub get
 

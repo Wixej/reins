@@ -1,0 +1,54 @@
+name: Android Build
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Restore Android wrapper files for CI
+        working-directory: android
+        shell: bash
+        run: |
+          cat <<EOF > local.properties
+          flutter.sdk=${FLUTTER_ROOT}
+          sdk.dir=${ANDROID_SDK_ROOT}
+          EOF
+          gradle wrapper --gradle-version 8.9
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reins-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk

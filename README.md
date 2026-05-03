@@ -6,6 +6,8 @@ Reins is a multi-platform, open-source, privacy-first app designed for Ollama us
 
 Эта ветка содержит доработанную Android-версию клиента Reins для Ollama. Основной упор сделан на удобное русскоязычное общение с локальными моделями, голосовой режим и практичные функции для ежедневного использования.
 
+Скачать APK для Android arm64: [reins-android-v1.3.72-arm64.apk](release/apk/reins-android-v1.3.72-arm64.apk)
+
 Что добавлено и изменено:
 
 - **Русский интерфейс**: переведены основные экраны, настройки, меню чата и подсказки.

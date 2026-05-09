@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "voices": {
+    "irina": {
+      "urls": [
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ru_RU-irina-medium-int8.tar.bz2"
+      ],
+      "archiveRoot": "vits-piper-ru_RU-irina-medium-int8",
+      "modelFileName": "ru_RU-irina-medium.onnx"
+    },
+    "ruslan": {
+      "urls": [
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ru_RU-ruslan-medium-int8.tar.bz2"
+      ],
+      "archiveRoot": "vits-piper-ru_RU-ruslan-medium-int8",
+      "modelFileName": "ru_RU-ruslan-medium.onnx"
+    },
+    "dmitri": {
+      "urls": [
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ru_RU-dmitri-medium-int8.tar.bz2"
+      ],
+      "archiveRoot": "vits-piper-ru_RU-dmitri-medium-int8",
+      "modelFileName": "ru_RU-dmitri-medium.onnx"
+    },
+    "denis": {
+      "urls": [
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ru_RU-denis-medium-int8.tar.bz2"
+      ],
+      "archiveRoot": "vits-piper-ru_RU-denis-medium-int8",
+      "modelFileName": "ru_RU-denis-medium.onnx"
+    }
+  },
+  "asr": {
+    "t-one-ru": {
+      "urls": [
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-t-one-russian-2025-09-08.tar.bz2"
+      ],
+      "archiveRoot": "sherpa-onnx-streaming-t-one-russian-2025-09-08",
+      "modelFileName": "model.onnx",
+      "vadUrls": [
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
+      ],
+      "vadModelFileName": "silero_vad.onnx"
+    }
+  }
+}

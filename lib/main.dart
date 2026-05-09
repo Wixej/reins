@@ -56,7 +56,15 @@ void main() async {
         Provider(create: (_) => ImageService()),
         Provider(create: (_) => DocumentService()),
         Provider(create: (_) => SpeechService()),
-        Provider(create: (_) => TtsService()),
+        Provider(
+          create: (_) => OfflineAiAsrService(),
+          dispose: (_, service) => service.dispose(),
+        ),
+        Provider(
+          create: (_) => OfflineAiTtsService(),
+          dispose: (_, service) => service.dispose(),
+        ),
+        Provider(create: (context) => TtsService(context.read())),
         ChangeNotifierProvider(
           create: (context) => ChatProvider(
             ollamaService: context.read(),
@@ -70,6 +78,7 @@ void main() async {
             imageService: context.read(),
             documentService: context.read(),
             speechService: context.read(),
+            offlineAiAsrService: context.read(),
             ttsService: context.read(),
           ),
         ),
@@ -132,7 +141,6 @@ class ReinsApp extends StatelessWidget {
   Brightness? get _brightness {
     final brightnessValue = Hive.box('settings').get('brightness');
     if (brightnessValue == null) return null;
-    if (brightnessValue == 2) return Brightness.dark;
     return brightnessValue == 1 ? Brightness.light : Brightness.dark;
   }
 
@@ -140,51 +148,80 @@ class ReinsApp extends StatelessWidget {
     required Color seedColor,
     required Brightness platformBrightness,
   }) {
-    final brightnessValue = Hive.box('settings').get('brightness');
-    final isBlackTheme = brightnessValue == 2;
+    final brightness = _brightness ?? platformBrightness;
+    final isDarkTheme = brightness == Brightness.dark;
 
-    final colorScheme = isBlackTheme
-        ? _buildBlackColorScheme(seedColor)
+    final colorScheme = isDarkTheme
+        ? _buildChatGptDarkColorScheme(seedColor)
         : ColorScheme.fromSeed(
-            brightness: _brightness ?? platformBrightness,
+            brightness: Brightness.light,
             dynamicSchemeVariant: DynamicSchemeVariant.neutral,
             seedColor: seedColor,
           );
 
     return ThemeData(
       colorScheme: colorScheme,
-      scaffoldBackgroundColor: isBlackTheme ? colorScheme.surface : null,
+      scaffoldBackgroundColor: isDarkTheme ? colorScheme.surface : null,
       appBarTheme: AppBarTheme(
         centerTitle: true,
-        backgroundColor: isBlackTheme ? colorScheme.surfaceContainerLow : null,
-        foregroundColor: isBlackTheme ? colorScheme.onSurface : null,
-        surfaceTintColor: isBlackTheme ? Colors.transparent : null,
+        backgroundColor: isDarkTheme ? colorScheme.surface : null,
+        foregroundColor: isDarkTheme ? colorScheme.onSurface : null,
+        surfaceTintColor: isDarkTheme ? Colors.transparent : null,
       ),
       bottomSheetTheme: BottomSheetThemeData(
-        backgroundColor: isBlackTheme ? colorScheme.surfaceContainerLow : null,
-        surfaceTintColor: isBlackTheme ? Colors.transparent : null,
+        backgroundColor: isDarkTheme ? colorScheme.surfaceContainerLow : null,
+        surfaceTintColor: isDarkTheme ? Colors.transparent : null,
       ),
       dialogTheme: DialogThemeData(
-        backgroundColor: isBlackTheme ? colorScheme.surfaceContainerHigh : null,
-        surfaceTintColor: isBlackTheme ? Colors.transparent : null,
+        backgroundColor: isDarkTheme ? colorScheme.surfaceContainerHigh : null,
+        surfaceTintColor: isDarkTheme ? Colors.transparent : null,
       ),
       cardTheme: CardThemeData(
-        color: isBlackTheme ? colorScheme.surfaceContainer : null,
-        surfaceTintColor: isBlackTheme ? Colors.transparent : null,
+        color: isDarkTheme ? colorScheme.surfaceContainer : null,
+        surfaceTintColor: isDarkTheme ? Colors.transparent : null,
       ),
       drawerTheme: DrawerThemeData(
-        backgroundColor: isBlackTheme ? colorScheme.surfaceContainerLow : null,
-        surfaceTintColor: isBlackTheme ? Colors.transparent : null,
+        backgroundColor: isDarkTheme ? colorScheme.surface : null,
+        surfaceTintColor: isDarkTheme ? Colors.transparent : null,
       ),
       inputDecorationTheme: InputDecorationTheme(
-        filled: isBlackTheme,
-        fillColor: isBlackTheme ? colorScheme.surfaceContainerLow : null,
+        filled: isDarkTheme,
+        fillColor: isDarkTheme ? colorScheme.surfaceContainerLow : null,
+      ),
+      textSelectionTheme: TextSelectionThemeData(
+        cursorColor: colorScheme.primary,
+        selectionColor: isDarkTheme
+            ? colorScheme.primary.withValues(alpha: 0.38)
+            : colorScheme.primary.withValues(alpha: 0.24),
+        selectionHandleColor: colorScheme.primary,
+      ),
+      menuTheme: MenuThemeData(
+        style: isDarkTheme
+            ? MenuStyle(
+                backgroundColor: WidgetStatePropertyAll(colorScheme.surfaceContainer),
+                surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+                shape: WidgetStatePropertyAll(
+                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+                ),
+              )
+            : null,
+      ),
+      popupMenuTheme: PopupMenuThemeData(
+        color: isDarkTheme ? colorScheme.surfaceContainer : null,
+        surfaceTintColor: isDarkTheme ? Colors.transparent : null,
+      ),
+      navigationDrawerTheme: NavigationDrawerThemeData(
+        backgroundColor: isDarkTheme ? colorScheme.surface : null,
+      ),
+      listTileTheme: ListTileThemeData(
+        iconColor: isDarkTheme ? colorScheme.onSurface : null,
+        textColor: isDarkTheme ? colorScheme.onSurface : null,
       ),
       useMaterial3: true,
     );
   }
 
-  ColorScheme _buildBlackColorScheme(Color seedColor) {
+  ColorScheme _buildChatGptDarkColorScheme(Color seedColor) {
     final base = ColorScheme.fromSeed(
       brightness: Brightness.dark,
       dynamicSchemeVariant: DynamicSchemeVariant.neutral,
@@ -193,33 +230,33 @@ class ReinsApp extends StatelessWidget {
 
     return base.copyWith(
       brightness: Brightness.dark,
-      surface: const Color(0xFF050606),
-      onSurface: const Color(0xFFE7ECEA),
-      surfaceDim: const Color(0xFF030404),
-      surfaceBright: const Color(0xFF1E2525),
-      surfaceContainerLowest: const Color(0xFF030404),
-      surfaceContainerLow: const Color(0xFF090C0C),
-      surfaceContainer: const Color(0xFF101414),
-      surfaceContainerHigh: const Color(0xFF161C1C),
-      surfaceContainerHighest: const Color(0xFF1D2525),
-      onSurfaceVariant: const Color(0xFFBBC8C5),
-      outline: const Color(0xFF72807D),
-      outlineVariant: const Color(0xFF2B3534),
-      inverseSurface: const Color(0xFFE1E7E5),
-      onInverseSurface: const Color(0xFF111616),
+      surface: const Color(0xFF0B0B0B),
+      onSurface: const Color(0xFFF4F4F4),
+      surfaceDim: const Color(0xFF060606),
+      surfaceBright: const Color(0xFF2B2B2B),
+      surfaceContainerLowest: const Color(0xFF050505),
+      surfaceContainerLow: const Color(0xFF151515),
+      surfaceContainer: const Color(0xFF202020),
+      surfaceContainerHigh: const Color(0xFF2F2F2F),
+      surfaceContainerHighest: const Color(0xFF3A3A3A),
+      onSurfaceVariant: const Color(0xFFC8C8C8),
+      outline: const Color(0xFF5A5A5A),
+      outlineVariant: const Color(0xFF343434),
+      inverseSurface: const Color(0xFFF4F4F4),
+      onInverseSurface: const Color(0xFF101010),
       primary: base.primary.withValues(alpha: 0.92),
       primaryContainer: Color.alphaBlend(
-        base.primary.withValues(alpha: 0.18),
-        const Color(0xFF121919),
+        base.primary.withValues(alpha: 0.28),
+        const Color(0xFF2B2B2B),
       ),
-      onPrimaryContainer: const Color(0xFFEAF6F3),
+      onPrimaryContainer: const Color(0xFFFFFFFF),
       secondaryContainer: Color.alphaBlend(
-        base.secondary.withValues(alpha: 0.14),
-        const Color(0xFF121919),
+        base.secondary.withValues(alpha: 0.12),
+        const Color(0xFF303030),
       ),
       tertiaryContainer: Color.alphaBlend(
-        base.tertiary.withValues(alpha: 0.14),
-        const Color(0xFF121919),
+        base.tertiary.withValues(alpha: 0.12),
+        const Color(0xFF303030),
       ),
       shadow: Colors.black,
       scrim: Colors.black,

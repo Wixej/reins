@@ -33,6 +33,18 @@ class RetainedPositionScrollPhysics extends ScrollPhysics {
       isScrolling: isScrolling,
       velocity: velocity,
     );
+    final deltaHeight = widgetSizeProxy.deltaHeight;
+
+    if (isScrolling || velocity.abs() > 0.1) {
+      widgetSizeProxy.deltaHeight = 0.0;
+      return adjustPosition;
+    }
+
+    if (deltaHeight.abs() < 0.5) {
+      return adjustPosition;
+    }
+
+    widgetSizeProxy.deltaHeight = 0.0;
 
     if (adjustPosition <= 44) {
       // 44 is just a threshold to adjust the position when the user scrolls to the bottom
@@ -41,7 +53,7 @@ class RetainedPositionScrollPhysics extends ScrollPhysics {
       return adjustPosition;
     } else {
       // Add the delta height to keep the scroll position stable
-      return adjustPosition + widgetSizeProxy.deltaHeight;
+      return adjustPosition + deltaHeight;
     }
   }
 }

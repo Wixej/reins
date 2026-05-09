@@ -18,11 +18,18 @@ import 'package:reins/Providers/chat_provider.dart';
 import 'package:reins/Services/services.dart';
 
 class ChatPageViewModel extends ChangeNotifier {
+  static const _speechLocaleId = 'ru_RU';
+  static const _voiceInputPauseFor = Duration(seconds: 7);
+  static const _voiceConversationPauseFor = Duration(milliseconds: 1500);
+  static const _voiceConversationListenFor = Duration(seconds: 120);
+  static const _voiceConversationFinalGrace = Duration(milliseconds: 250);
+
   final ChatProvider _chatProvider;
   final PermissionService _permissionService;
   final ImageService _imageService;
   final DocumentService _documentService;
   final SpeechService _speechService;
+  final OfflineAiAsrService _offlineAiAsrService;
   final TtsService _ttsService;
 
   ChatPageViewModel({
@@ -31,12 +38,14 @@ class ChatPageViewModel extends ChangeNotifier {
     required ImageService imageService,
     required DocumentService documentService,
     required SpeechService speechService,
+    required OfflineAiAsrService offlineAiAsrService,
     required TtsService ttsService,
   })  : _chatProvider = chatProvider,
         _permissionService = permissionService,
         _imageService = imageService,
         _documentService = documentService,
         _speechService = speechService,
+        _offlineAiAsrService = offlineAiAsrService,
         _ttsService = ttsService {
     _initialize();
   }
@@ -53,6 +62,12 @@ class ChatPageViewModel extends ChangeNotifier {
   bool get canSend => hasText || hasAttachments;
   bool get supportsVoiceInput => Platform.isAndroid || Platform.isIOS;
   bool get voiceModeEnabled => Hive.box('settings').get('voiceModeEnabled', defaultValue: false) as bool;
+  bool get _useOfflineAiRecognition =>
+      Hive.box('settings').get(
+        OfflineAiAsrService.modeSettingKey,
+        defaultValue: OfflineAiAsrService.systemMode,
+      ) ==
+      OfflineAiAsrService.offlineAiMode;
 
   bool _isListening = false;
   bool get isListening => _isListening;
@@ -142,7 +157,7 @@ class ChatPageViewModel extends ChangeNotifier {
 
     _appLifecycleListener = AppLifecycleListener(onExitRequested: () async {
       await _imageService.deleteImages(imageFiles);
-      await _speechService.cancelListening();
+      await _cancelVoiceRecognition();
       await _ttsService.stop();
       return AppExitResponse.exit;
     });
@@ -162,7 +177,7 @@ class ChatPageViewModel extends ChangeNotifier {
     textFieldController.removeListener(_onTextFieldChanged);
     textFieldController.dispose();
     _voiceConversationFinalSendTimer?.cancel();
-    unawaited(_speechService.cancelListening());
+    unawaited(_cancelVoiceRecognition());
     unawaited(_ttsService.stop());
     _appLifecycleListener.dispose();
     _settingsSubscription.cancel();
@@ -328,9 +343,12 @@ class ChatPageViewModel extends ChangeNotifier {
 
     _voiceDraftPrefix = textFieldController.text.trim();
 
-    final didStart = await _speechService.startListening(
+    final didStart = await _startSelectedVoiceRecognition(
       onResult: _handleSpeechResult,
       onError: onError,
+      onStatusChanged: _handleSpeechStatus,
+      pauseFor: _voiceInputPauseFor,
+      listenFor: _voiceConversationListenFor,
     );
     if (!didStart) {
       _voiceDraftPrefix = '';
@@ -343,7 +361,7 @@ class ChatPageViewModel extends ChangeNotifier {
   }
 
   Future<void> stopVoiceInput() async {
-    await _speechService.stopListening();
+    await _stopVoiceRecognition();
     _setListening(false);
   }
 
@@ -398,7 +416,7 @@ class ChatPageViewModel extends ChangeNotifier {
     }
 
     if (_isListening) {
-      await _speechService.cancelListening();
+      await _cancelVoiceRecognition();
       _setListening(false);
     }
 
@@ -442,7 +460,7 @@ class ChatPageViewModel extends ChangeNotifier {
     _voiceConversationErrorHandler = null;
     _voiceConversationSession += 1;
 
-    await _speechService.cancelListening();
+    await _cancelVoiceRecognition();
     await _ttsService.stop();
 
     _setListening(false);
@@ -536,6 +554,53 @@ class ChatPageViewModel extends ChangeNotifier {
     }
   }
 
+  Future<bool> _startSelectedVoiceRecognition({
+    required void Function(String recognizedText, bool isFinal) onResult,
+    required ValueChanged<String> onError,
+    required ValueChanged<String> onStatusChanged,
+    required Duration pauseFor,
+    required Duration listenFor,
+  }) async {
+    if (_useOfflineAiRecognition) {
+      return _offlineAiAsrService.startListening(
+        onResult: onResult,
+        onError: onError,
+        onStatusChanged: onStatusChanged,
+        pauseFor: pauseFor,
+        listenFor: listenFor,
+      );
+    }
+
+    final isInitialized = await _speechService.initialize(
+      onError: onError,
+      onStatusChanged: onStatusChanged,
+    );
+    if (!isInitialized) {
+      return false;
+    }
+
+    return _speechService.startListening(
+      onResult: onResult,
+      onError: onError,
+      listenMode: ListenMode.dictation,
+      partialResults: true,
+      pauseFor: pauseFor,
+      listenFor: listenFor,
+      localeId: _speechLocaleId,
+      cancelOnError: false,
+    );
+  }
+
+  Future<void> _stopVoiceRecognition() async {
+    await _speechService.stopListening();
+    await _offlineAiAsrService.stopListening();
+  }
+
+  Future<void> _cancelVoiceRecognition() async {
+    await _speechService.cancelListening();
+    await _offlineAiAsrService.cancelListening();
+  }
+
   Future<void> _startVoiceConversationListening(
     int session, {
     bool keepCurrentPhase = false,
@@ -554,7 +619,7 @@ class ChatPageViewModel extends ChangeNotifier {
       _voiceConversationFinalSendTimer?.cancel();
       _voiceConversationFinalSendTimer = null;
       _voiceConversationDraft = '';
-      await _speechService.cancelListening();
+      await _cancelVoiceRecognition();
       _voiceConversationWaitingForNativeListening = true;
       notifyListeners();
 
@@ -566,23 +631,26 @@ class ChatPageViewModel extends ChangeNotifier {
         return;
       }
 
-      final didStart = await _speechService.startListening(
+      final didStart = await _startSelectedVoiceRecognition(
         onResult: (recognizedText, isFinal) {
           _handleVoiceConversationSpeechResult(session, recognizedText, isFinal);
         },
         onError: (message) {
           _handleVoiceConversationSpeechError(session, message);
         },
-        listenMode: ListenMode.dictation,
-        partialResults: true,
-        pauseFor: const Duration(seconds: 4),
-        listenFor: const Duration(seconds: 90),
-        cancelOnError: false,
+        onStatusChanged: _handleVoiceConversationSpeechStatus,
+        pauseFor: _voiceConversationPauseFor,
+        listenFor: _voiceConversationListenFor,
       );
 
       if (!didStart) {
         _voiceConversationWaitingForNativeListening = false;
         _setListening(false);
+        if (_useOfflineAiRecognition) {
+          _isVoiceConversationMode = false;
+          _setVoiceConversationPhase(VoiceConversationPhase.idle);
+          return;
+        }
         if (_canRestartVoiceConversationListening) {
           unawaited(_restartVoiceConversationListening(
             session,
@@ -634,7 +702,7 @@ class ChatPageViewModel extends ChangeNotifier {
       return;
     }
 
-    _voiceConversationFinalSendTimer = Timer(const Duration(milliseconds: 900), () {
+    _voiceConversationFinalSendTimer = Timer(_voiceConversationFinalGrace, () {
       if (!_isCurrentVoiceConversationSession(session) || _voiceConversationTurnInFlight) {
         return;
       }
@@ -720,7 +788,7 @@ class ChatPageViewModel extends ChangeNotifier {
     }
 
     _setVoiceConversationPhase(VoiceConversationPhase.processing);
-    await _speechService.cancelListening();
+    await _cancelVoiceRecognition();
     _setListening(false);
     setTextFieldValue(normalizedPrompt);
 
@@ -750,7 +818,7 @@ class ChatPageViewModel extends ChangeNotifier {
         _setVoiceConversationPhase(VoiceConversationPhase.speaking);
 
         if (_isListening) {
-          await _speechService.cancelListening();
+          await _cancelVoiceRecognition();
           _setListening(false);
         }
 
@@ -981,27 +1049,15 @@ class ChatPageViewModel extends ChangeNotifier {
     while (rest.trim().isNotEmpty) {
       rest = rest.trimLeft();
 
-      final sentenceMatch = RegExp(r'[.!?вЂ¦]\s+').firstMatch(rest);
-      if (sentenceMatch != null && sentenceMatch.end >= 18) {
-        segments.add(rest.substring(0, sentenceMatch.end).trim());
-        rest = rest.substring(sentenceMatch.end);
+      final sentenceEnd = _findSpeechBoundary(
+        rest,
+        punctuation: const {'.', '!', '?', '…'},
+        minLength: 12,
+      );
+      if (sentenceEnd != null) {
+        segments.add(rest.substring(0, sentenceEnd).trim());
+        rest = rest.substring(sentenceEnd);
         continue;
-      }
-
-      final softPauseMatch = RegExp(r'[,;:]\s+').firstMatch(rest);
-      if (softPauseMatch != null && softPauseMatch.end >= 28) {
-        segments.add(rest.substring(0, softPauseMatch.end).trim());
-        rest = rest.substring(softPauseMatch.end);
-        continue;
-      }
-
-      if (rest.length >= 40) {
-        final splitAt = rest.lastIndexOf(' ', 40);
-        if (splitAt >= 22) {
-          segments.add(rest.substring(0, splitAt).trim());
-          rest = rest.substring(splitAt + 1);
-          continue;
-        }
       }
 
       if (force) {
@@ -1018,10 +1074,50 @@ class ChatPageViewModel extends ChangeNotifier {
     return (segments: segments, rest: rest);
   }
 
+  int? _findSpeechBoundary(
+    String text, {
+    required Set<String> punctuation,
+    required int minLength,
+  }) {
+    for (var index = 0; index < text.length; index++) {
+      if (!punctuation.contains(text[index])) {
+        continue;
+      }
+
+      final end = index + 1;
+      if (end < minLength) {
+        continue;
+      }
+
+      if (end == text.length || _isSpeechBoundaryAfterPunctuation(text, end)) {
+        return _consumeClosingPunctuation(text, end);
+      }
+    }
+
+    return null;
+  }
+
+  bool _isSpeechBoundaryAfterPunctuation(String text, int index) {
+    if (index >= text.length) {
+      return true;
+    }
+
+    final next = text[index];
+    return next.trim().isEmpty || '»”"\'’.'.contains(next);
+  }
+
+  int _consumeClosingPunctuation(String text, int index) {
+    var end = index;
+    while (end < text.length && '»”"\'’)]}'.contains(text[end])) {
+      end++;
+    }
+    return end;
+  }
+
   String _normalizeSpeechComparable(String value) {
     return value
         .toLowerCase()
-        .replaceAll(RegExp(r'[^Р°-СЏС‘a-z0-9 ]', unicode: true), ' ')
+        .replaceAll(RegExp(r'[^а-яёa-z0-9 ]', unicode: true), ' ')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
   }

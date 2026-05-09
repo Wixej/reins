@@ -10,6 +10,7 @@ import 'chat_bubble_actions.dart';
 import 'chat_bubble_image.dart';
 import 'chat_bubble_document.dart';
 import 'chat_bubble_menu.dart';
+import 'chat_code_block.dart';
 import 'chat_bubble_think_block.dart';
 
 class ChatBubble extends StatelessWidget {
@@ -111,23 +112,28 @@ class _ChatBubbleBody extends StatelessWidget {
             ),
             child: message.content.trim().isEmpty
                 ? const SizedBox.shrink()
-                : MarkdownBody(
-                    data: message.content,
-                    selectable: true,
-                    softLineBreak: true,
-                    styleSheet: context.markdownStyleSheet.copyWith(
-                      code: GoogleFonts.sourceCodePro(),
+                : SelectionArea(
+                    child: MarkdownBody(
+                      data: message.content,
+                      selectable: false,
+                      softLineBreak: true,
+                      styleSheet: context.markdownStyleSheet.copyWith(
+                        code: GoogleFonts.sourceCodePro(),
+                      ),
+                      builders: {
+                        'think': ThinkBlockBuilder(),
+                        'pre': ChatCodeBlockBuilder(),
+                      },
+                      extensionSet: md.ExtensionSet(
+                        <md.BlockSyntax>[ThinkBlockSyntax(), ...md.ExtensionSet.gitHubFlavored.blockSyntaxes],
+                        <md.InlineSyntax>[md.EmojiSyntax(), ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes],
+                      ),
+                      onTapLink: (text, href, title) {
+                        if (href != null && href.isNotEmpty) {
+                          launchUrlString(href);
+                        }
+                      },
                     ),
-                    builders: {'think': ThinkBlockBuilder()},
-                    extensionSet: md.ExtensionSet(
-                      <md.BlockSyntax>[ThinkBlockSyntax(), ...md.ExtensionSet.gitHubFlavored.blockSyntaxes],
-                      <md.InlineSyntax>[md.EmojiSyntax(), ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes],
-                    ),
-                    onTapLink: (text, href, title) {
-                      if (href != null && href.isNotEmpty) {
-                        launchUrlString(href);
-                      }
-                    },
                   ),
           ),
           Text(

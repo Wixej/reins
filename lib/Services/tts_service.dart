@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
+import 'offline_ai_tts_service.dart';
+
 class TtsEngineInfo {
   final String id;
   final String label;
@@ -19,11 +21,75 @@ class TtsEngineInfo {
 class TtsService {
   static const _languageCode = 'ru-RU';
   static const _engineSettingKey = 'ttsEngine';
+  static const modeSettingKey = 'ttsMode';
+  static const offlineVoiceSettingKey = 'offlineAiVoice';
+  static const speechRateSettingKey = 'ttsSpeechRate';
+  static const voicePitchSettingKey = 'ttsVoicePitch';
+  static const systemMode = 'system';
+  static const offlineAiMode = 'offlineAi';
 
   final FlutterTts _flutterTts = FlutterTts();
+  final OfflineAiTtsService _offlineAiTtsService;
 
   bool _isInitialized = false;
   Completer<void>? _activeSpeechCompleter;
+
+  TtsService(this._offlineAiTtsService);
+
+  List<OfflineAiVoice> get offlineAiVoices => OfflineAiTtsService.voices;
+
+  String get currentMode => Hive.box('settings').get(modeSettingKey, defaultValue: systemMode) as String;
+
+  double get currentSpeechRate => _settingDouble(speechRateSettingKey, defaultValue: 1.0).clamp(0.75, 1.3).toDouble();
+
+  double get currentVoicePitch => _settingDouble(voicePitchSettingKey, defaultValue: 1.0).clamp(0.85, 1.15).toDouble();
+
+  String get currentOfflineVoiceId => Hive.box('settings').get(
+        offlineVoiceSettingKey,
+        defaultValue: OfflineAiTtsService.defaultVoiceId,
+      ) as String;
+
+  Future<void> setMode(String value) async {
+    final normalized = value == offlineAiMode ? offlineAiMode : systemMode;
+    await Hive.box('settings').put(modeSettingKey, normalized);
+  }
+
+  Future<void> setOfflineVoice(String voiceId) async {
+    final voice = _offlineAiTtsService.voiceById(voiceId);
+    await Hive.box('settings').put(offlineVoiceSettingKey, voice.id);
+  }
+
+  Future<void> setSpeechRate(double value) async {
+    await Hive.box('settings').put(speechRateSettingKey, value.clamp(0.75, 1.3).toDouble());
+    if (_isInitialized) {
+      await _applyVoiceTuning();
+    }
+  }
+
+  Future<void> setVoicePitch(double value) async {
+    await Hive.box('settings').put(voicePitchSettingKey, value.clamp(0.85, 1.15).toDouble());
+    if (_isInitialized) {
+      await _applyVoiceTuning();
+    }
+  }
+
+  Future<bool> isOfflineVoiceDownloaded([String? voiceId]) {
+    return _offlineAiTtsService.isVoiceDownloaded(voiceId ?? currentOfflineVoiceId);
+  }
+
+  Future<void> downloadOfflineVoice(
+    String? voiceId, {
+    void Function(OfflineAiTtsDownloadProgress progress)? onProgress,
+  }) {
+    return _offlineAiTtsService.downloadVoice(
+      voiceId ?? currentOfflineVoiceId,
+      onProgress: onProgress,
+    );
+  }
+
+  Future<void> deleteOfflineVoice([String? voiceId]) {
+    return _offlineAiTtsService.deleteVoice(voiceId ?? currentOfflineVoiceId);
+  }
 
   Future<void> initialize() async {
     if (!_isInitialized) {
@@ -38,8 +104,7 @@ class TtsService {
         _activeSpeechCompleter = null;
       });
       await _flutterTts.setLanguage(_languageCode);
-      await _flutterTts.setSpeechRate(0.45);
-      await _flutterTts.setPitch(1.0);
+      await _applyVoiceTuning();
 
       if (Platform.isAndroid) {
         await _flutterTts.setAudioAttributesForNavigation();
@@ -139,6 +204,17 @@ class TtsService {
       return;
     }
 
+    if (currentMode == offlineAiMode) {
+      await _flutterTts.stop();
+      _completeActiveSpeech();
+      await _offlineAiTtsService.speak(
+        normalizedText,
+        voiceId: currentOfflineVoiceId,
+        speed: currentSpeechRate,
+      );
+      return;
+    }
+
     await initialize();
     final speechCompleter = Completer<void>();
     _activeSpeechCompleter = speechCompleter;
@@ -157,6 +233,7 @@ class TtsService {
   }
 
   Future<void> stop() async {
+    await _offlineAiTtsService.stop();
     await _flutterTts.stop();
     _completeActiveSpeech();
   }
@@ -174,6 +251,11 @@ class TtsService {
     return Duration(seconds: seconds);
   }
 
+  Future<void> _applyVoiceTuning() async {
+    await _flutterTts.setSpeechRate((0.45 * currentSpeechRate).clamp(0.25, 0.75).toDouble());
+    await _flutterTts.setPitch(currentVoicePitch);
+  }
+
   Future<void> _applySavedEngine() async {
     if (!Platform.isAndroid) {
       return;
@@ -189,6 +271,15 @@ class TtsService {
     } catch (_) {
       await Hive.box('settings').delete(_engineSettingKey);
     }
+  }
+
+  double _settingDouble(String key, {required double defaultValue}) {
+    final raw = Hive.box('settings').get(key, defaultValue: defaultValue);
+    if (raw is num) {
+      return raw.toDouble();
+    }
+
+    return double.tryParse(raw.toString()) ?? defaultValue;
   }
 
   String _normalizeForSpeech(String text) {

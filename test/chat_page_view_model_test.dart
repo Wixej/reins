@@ -25,6 +25,7 @@ void main() {
   late FakeImageService fakeImageService;
   late FakeDocumentService fakeDocumentService;
   late FakeSpeechService fakeSpeechService;
+  late FakeOfflineAiAsrService fakeOfflineAiAsrService;
   late FakeTtsService fakeTtsService;
   late ChatPageViewModel viewModel;
 
@@ -44,6 +45,7 @@ void main() {
     fakeImageService = FakeImageService();
     fakeDocumentService = FakeDocumentService();
     fakeSpeechService = FakeSpeechService();
+    fakeOfflineAiAsrService = FakeOfflineAiAsrService();
     fakeTtsService = FakeTtsService();
 
     // Ensure server is configured for most tests
@@ -55,6 +57,7 @@ void main() {
       imageService: fakeImageService,
       documentService: fakeDocumentService,
       speechService: fakeSpeechService,
+      offlineAiAsrService: fakeOfflineAiAsrService,
       ttsService: fakeTtsService,
     );
   });
@@ -629,10 +632,85 @@ class FakeSpeechService implements SpeechService {
   }
 }
 
+class FakeOfflineAiAsrService implements OfflineAiAsrService {
+  bool startedListening = false;
+  bool stoppedListening = false;
+
+  @override
+  bool get isListening => startedListening && !stoppedListening;
+
+  @override
+  OfflineAiAsrModel modelById(String? id) => OfflineAiAsrService.models.first;
+
+  @override
+  Future<bool> isModelDownloaded(String? modelId) async => true;
+
+  @override
+  Future<void> downloadModel(
+    String? modelId, {
+    void Function(OfflineAiAsrDownloadProgress progress)? onProgress,
+  }) async {}
+
+  @override
+  Future<void> deleteModel(String? modelId) async {}
+
+  @override
+  Future<bool> startListening({
+    required void Function(String recognizedText, bool isFinal) onResult,
+    void Function(String message)? onError,
+    void Function(String status)? onStatusChanged,
+    Duration pauseFor = const Duration(seconds: 7),
+    Duration listenFor = const Duration(seconds: 120),
+    String? modelId,
+  }) async {
+    startedListening = true;
+    stoppedListening = false;
+    onStatusChanged?.call('listening');
+    return true;
+  }
+
+  @override
+  Future<void> stopListening() async {
+    stoppedListening = true;
+  }
+
+  @override
+  Future<void> cancelListening() async {
+    stoppedListening = true;
+  }
+
+  @override
+  Future<void> dispose() async {}
+}
+
 class FakeTtsService implements TtsService {
   bool initialized = false;
   bool stopped = false;
   String? lastSpokenText;
+
+  @override
+  String get currentMode => TtsService.systemMode;
+
+  @override
+  double get currentSpeechRate => 1.0;
+
+  @override
+  double get currentVoicePitch => 1.0;
+
+  @override
+  String get currentOfflineVoiceId => OfflineAiTtsService.defaultVoiceId;
+
+  @override
+  List<OfflineAiVoice> get offlineAiVoices => OfflineAiTtsService.voices;
+
+  @override
+  Future<void> deleteOfflineVoice([String? voiceId]) async {}
+
+  @override
+  Future<void> downloadOfflineVoice(
+    String? voiceId, {
+    void Function(OfflineAiTtsDownloadProgress progress)? onProgress,
+  }) async {}
 
   @override
   Future<List<TtsEngineInfo>> getAvailableEngines() async {
@@ -645,7 +723,24 @@ class FakeTtsService implements TtsService {
   }
 
   @override
+  Future<bool> isOfflineVoiceDownloaded([String? voiceId]) async {
+    return false;
+  }
+
+  @override
   Future<void> setEngine(String? engineId) async {}
+
+  @override
+  Future<void> setMode(String value) async {}
+
+  @override
+  Future<void> setOfflineVoice(String voiceId) async {}
+
+  @override
+  Future<void> setSpeechRate(double value) async {}
+
+  @override
+  Future<void> setVoicePitch(double value) async {}
 
   @override
   Future<void> speak(String text) async {

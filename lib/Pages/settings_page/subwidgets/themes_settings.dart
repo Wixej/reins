@@ -79,14 +79,8 @@ class _ThemesSettingsState extends State<ThemesSettings> {
                   _BrightnessChip(
                     label: 'Темная',
                     icon: Icons.dark_mode_outlined,
-                    selected: _brightnessValue == 0,
+                    selected: _normalizedBrightnessValue == 0,
                     onSelected: () => _setBrightness(0),
-                  ),
-                  _BrightnessChip(
-                    label: 'Черная',
-                    icon: Icons.nightlight_round,
-                    selected: _brightnessValue == 2,
-                    onSelected: () => _setBrightness(2),
                   ),
                 ],
               ),
@@ -134,12 +128,13 @@ class _ThemesSettingsState extends State<ThemesSettings> {
 
   int? get _brightnessValue => _settingsBox.get('brightness') as int?;
 
+  int? get _normalizedBrightnessValue => _brightnessValue == 2 ? 0 : _brightnessValue;
+
   String get _currentThemeLabel {
-    return switch (_brightnessValue) {
+    return switch (_normalizedBrightnessValue) {
       null => 'как в системе',
       1 => 'белая',
       0 => 'темная',
-      2 => 'черная',
       _ => 'как в системе',
     };
   }

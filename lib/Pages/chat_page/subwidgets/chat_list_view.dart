@@ -93,7 +93,6 @@ class _ChatListViewState extends State<ChatListView> {
             if (widget.isAwaitingReply)
               SliverToBoxAdapter(
                 child: Shimmer.fromColors(
-                  // TODO: Play with the colors to make it look better
                   baseColor: Theme.of(context).colorScheme.onPrimary,
                   highlightColor: Theme.of(context).colorScheme.onSurface,
                   period: const Duration(milliseconds: 2500),

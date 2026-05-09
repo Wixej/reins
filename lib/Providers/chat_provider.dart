@@ -535,7 +535,6 @@ class ChatProvider extends ChangeNotifier {
   Future<void> saveAsNewModel(String modelName) async {
     final associatedChat = currentChat;
     if (associatedChat == null) {
-      // TODO: Empty chat should be saved as a new model.
       throw OllamaException("No chat is selected.");
     }
 

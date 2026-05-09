@@ -84,7 +84,7 @@ class OllamaMessage {
         role: json["message"] != null
             ? OllamaMessageRole.fromString(json["message"]["role"])
             : OllamaMessageRole.assistant, // For generated messages (default)
-        images: null, // TODO: Implement image support
+        images: null,
         createdAt: DateTime.parse(json["created_at"]),
         model: json["model"],
         thinking: _parseThinking(json),

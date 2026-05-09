@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
@@ -37,7 +38,20 @@ class OfflineAiTtsDownloadProgress {
   });
 }
 
+class _OfflineAiVoiceDownloadSpec {
+  final List<String> urls;
+  final String archiveRoot;
+  final String modelFileName;
+
+  const _OfflineAiVoiceDownloadSpec({
+    required this.urls,
+    required this.archiveRoot,
+    required this.modelFileName,
+  });
+}
+
 class OfflineAiTtsService {
+  static const _downloadManifestUrl = 'https://raw.githubusercontent.com/Wixej/reins/main/model_manifest.json';
   static const defaultVoiceId = 'irina';
 
   static const voices = <OfflineAiVoice>[
@@ -110,6 +124,7 @@ class OfflineAiTtsService {
     void Function(OfflineAiTtsDownloadProgress progress)? onProgress,
   }) async {
     final voice = voiceById(voiceId);
+    final downloadSpec = await _resolveVoiceDownloadSpec(voice);
     final baseDir = await _baseDir();
     final voiceDir = Directory(p.join(baseDir.path, voice.id));
     final tempDir = Directory(p.join(baseDir.path, '${voice.id}.download'));
@@ -124,12 +139,13 @@ class OfflineAiTtsService {
       onProgress?.call(
         const OfflineAiTtsDownloadProgress(value: 0, label: 'Скачивание голоса...'),
       );
-      await _downloadArchive(voice.archiveUrl, archiveFile, onProgress);
+      await _downloadArchive(downloadSpec.urls, archiveFile, onProgress);
 
       onProgress?.call(
         const OfflineAiTtsDownloadProgress(value: 0.75, label: 'Распаковка модели...'),
       );
-      await _extractArchive(archiveFile, tempDir, voice.archiveRoot);
+      await _extractArchive(archiveFile, tempDir, downloadSpec.archiveRoot);
+      await _normalizeDownloadedVoiceFiles(tempDir, voice, downloadSpec);
 
       if (voiceDir.existsSync()) {
         await voiceDir.delete(recursive: true);
@@ -347,7 +363,99 @@ class OfflineAiTtsService {
     _workerRequests.clear();
   }
 
+  Future<_OfflineAiVoiceDownloadSpec> _resolveVoiceDownloadSpec(OfflineAiVoice voice) async {
+    final fallback = _OfflineAiVoiceDownloadSpec(
+      urls: [voice.archiveUrl],
+      archiveRoot: voice.archiveRoot,
+      modelFileName: voice.modelFileName,
+    );
+
+    try {
+      final manifest = await _fetchDownloadManifest();
+      final voices = manifest['voices'];
+      if (voices is! Map) return fallback;
+
+      final entry = voices[voice.id];
+      if (entry is! Map) return fallback;
+
+      final urls = _readManifestUrls(entry);
+      final archiveRoot = (entry['archiveRoot'] as String?)?.trim();
+      final modelFileName = (entry['modelFileName'] as String?)?.trim();
+
+      if (urls.isEmpty ||
+          archiveRoot == null ||
+          archiveRoot.isEmpty ||
+          modelFileName == null ||
+          modelFileName.isEmpty) {
+        return fallback;
+      }
+
+      return _OfflineAiVoiceDownloadSpec(
+        urls: urls,
+        archiveRoot: archiveRoot,
+        modelFileName: modelFileName,
+      );
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  Future<Map<String, Object?>> _fetchDownloadManifest() async {
+    final response = await http.get(Uri.parse(_downloadManifestUrl)).timeout(const Duration(seconds: 5));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw HttpException('Manifest HTTP ${response.statusCode}');
+    }
+
+    final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    if (decoded is! Map) {
+      throw const FormatException('Manifest root must be an object');
+    }
+
+    return decoded.cast<String, Object?>();
+  }
+
+  List<String> _readManifestUrls(Map<dynamic, dynamic> entry) {
+    final urls = <String>[];
+    final rawUrls = entry['urls'];
+    if (rawUrls is List) {
+      urls.addAll(rawUrls.whereType<String>());
+    }
+
+    final rawUrl = entry['url'];
+    if (rawUrl is String) {
+      urls.add(rawUrl);
+    }
+
+    return urls
+        .map((url) => url.trim())
+        .where((url) => url.startsWith('https://') || url.startsWith('http://'))
+        .toSet()
+        .toList();
+  }
+
   Future<void> _downloadArchive(
+    List<String> urls,
+    File target,
+    void Function(OfflineAiTtsDownloadProgress progress)? onProgress,
+  ) async {
+    Object? lastError;
+    for (final url in urls) {
+      try {
+        if (target.existsSync()) {
+          await target.delete();
+        }
+
+        await _downloadArchiveFromUrl(url, target, onProgress);
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw HttpException('Не удалось скачать голос: $lastError');
+  }
+
+  Future<void> _downloadArchiveFromUrl(
     String url,
     File target,
     void Function(OfflineAiTtsDownloadProgress progress)? onProgress,
@@ -361,6 +469,7 @@ class OfflineAiTtsService {
       throw HttpException('Не удалось скачать голос: HTTP ${response.statusCode}');
     }
 
+    await target.parent.create(recursive: true);
     final sink = target.openWrite();
     final total = response.contentLength;
     var received = 0;
@@ -383,6 +492,23 @@ class OfflineAiTtsService {
     } finally {
       await sink.close();
       client.close();
+    }
+  }
+
+  Future<void> _normalizeDownloadedVoiceFiles(
+    Directory tempDir,
+    OfflineAiVoice voice,
+    _OfflineAiVoiceDownloadSpec downloadSpec,
+  ) async {
+    if (downloadSpec.modelFileName == voice.modelFileName) {
+      return;
+    }
+
+    final actualModel = File(p.join(tempDir.path, downloadSpec.modelFileName));
+    final expectedModel = File(p.join(tempDir.path, voice.modelFileName));
+    if (!expectedModel.existsSync() && actualModel.existsSync()) {
+      await expectedModel.parent.create(recursive: true);
+      await actualModel.copy(expectedModel.path);
     }
   }
 

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -42,7 +43,24 @@ class OfflineAiAsrDownloadProgress {
   });
 }
 
+class _OfflineAiAsrDownloadSpec {
+  final List<String> urls;
+  final String archiveRoot;
+  final String modelFileName;
+  final List<String> vadUrls;
+  final String? vadModelFileName;
+
+  const _OfflineAiAsrDownloadSpec({
+    required this.urls,
+    required this.archiveRoot,
+    required this.modelFileName,
+    required this.vadUrls,
+    required this.vadModelFileName,
+  });
+}
+
 class OfflineAiAsrService {
+  static const _downloadManifestUrl = 'https://raw.githubusercontent.com/Wixej/reins/main/model_manifest.json';
   static const modeSettingKey = 'speechRecognitionMode';
   static const systemMode = 'system';
   static const offlineAiMode = 'offline_ai';
@@ -111,6 +129,7 @@ class OfflineAiAsrService {
     void Function(OfflineAiAsrDownloadProgress progress)? onProgress,
   }) async {
     final model = modelById(modelId);
+    final downloadSpec = await _resolveModelDownloadSpec(model);
     final baseDir = await _baseDir();
     final modelDir = Directory(p.join(baseDir.path, model.id));
     final tempDir = Directory(p.join(baseDir.path, '${model.id}.download'));
@@ -125,13 +144,14 @@ class OfflineAiAsrService {
       onProgress?.call(
         const OfflineAiAsrDownloadProgress(value: 0, label: 'Скачивание модели распознавания...'),
       );
-      await _downloadArchive(model.archiveUrl, archiveFile, onProgress);
+      await _downloadArchive(downloadSpec.urls, archiveFile, onProgress);
 
       onProgress?.call(
         const OfflineAiAsrDownloadProgress(value: 0.78, label: 'Распаковка модели...'),
       );
-      await _extractArchive(archiveFile, tempDir, model.archiveRoot);
-      await _downloadVadModel(model, tempDir, onProgress);
+      await _extractArchive(archiveFile, tempDir, downloadSpec.archiveRoot);
+      await _normalizeDownloadedModelFiles(tempDir, model, downloadSpec);
+      await _downloadVadModel(model, downloadSpec, tempDir, onProgress);
 
       if (modelDir.existsSync()) {
         await modelDir.delete(recursive: true);
@@ -469,21 +489,122 @@ class OfflineAiAsrService {
     _vad = null;
   }
 
+  Future<_OfflineAiAsrDownloadSpec> _resolveModelDownloadSpec(OfflineAiAsrModel model) async {
+    final fallback = _OfflineAiAsrDownloadSpec(
+      urls: [model.archiveUrl],
+      archiveRoot: model.archiveRoot,
+      modelFileName: model.modelFileName,
+      vadUrls: [
+        if (model.vadModelUrl != null) model.vadModelUrl!,
+      ],
+      vadModelFileName: model.vadModelFileName,
+    );
+
+    try {
+      final manifest = await _fetchDownloadManifest();
+      final asr = manifest['asr'];
+      if (asr is! Map) return fallback;
+
+      final entry = asr[model.id];
+      if (entry is! Map) return fallback;
+
+      final urls = _readManifestUrls(entry);
+      final archiveRoot = (entry['archiveRoot'] as String?)?.trim();
+      final modelFileName = (entry['modelFileName'] as String?)?.trim();
+      final vadUrls = _readManifestUrls(entry, urlsKey: 'vadUrls', urlKey: 'vadUrl');
+      final vadModelFileName = (entry['vadModelFileName'] as String?)?.trim();
+
+      if (urls.isEmpty ||
+          archiveRoot == null ||
+          archiveRoot.isEmpty ||
+          modelFileName == null ||
+          modelFileName.isEmpty) {
+        return fallback;
+      }
+
+      return _OfflineAiAsrDownloadSpec(
+        urls: urls,
+        archiveRoot: archiveRoot,
+        modelFileName: modelFileName,
+        vadUrls: vadUrls.isEmpty ? fallback.vadUrls : vadUrls,
+        vadModelFileName: vadModelFileName?.isEmpty == true
+            ? fallback.vadModelFileName
+            : (vadModelFileName ?? fallback.vadModelFileName),
+      );
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  Future<Map<String, Object?>> _fetchDownloadManifest() async {
+    final response = await http.get(Uri.parse(_downloadManifestUrl)).timeout(const Duration(seconds: 5));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw HttpException('Manifest HTTP ${response.statusCode}');
+    }
+
+    final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    if (decoded is! Map) {
+      throw const FormatException('Manifest root must be an object');
+    }
+
+    return decoded.cast<String, Object?>();
+  }
+
+  List<String> _readManifestUrls(
+    Map<dynamic, dynamic> entry, {
+    String urlsKey = 'urls',
+    String urlKey = 'url',
+  }) {
+    final urls = <String>[];
+    final rawUrls = entry[urlsKey];
+    if (rawUrls is List) {
+      urls.addAll(rawUrls.whereType<String>());
+    }
+
+    final rawUrl = entry[urlKey];
+    if (rawUrl is String) {
+      urls.add(rawUrl);
+    }
+
+    return urls
+        .map((url) => url.trim())
+        .where((url) => url.startsWith('https://') || url.startsWith('http://'))
+        .toSet()
+        .toList();
+  }
+
+  Future<void> _normalizeDownloadedModelFiles(
+    Directory tempDir,
+    OfflineAiAsrModel model,
+    _OfflineAiAsrDownloadSpec downloadSpec,
+  ) async {
+    if (downloadSpec.modelFileName == model.modelFileName) {
+      return;
+    }
+
+    final actualModel = File(p.join(tempDir.path, downloadSpec.modelFileName));
+    final expectedModel = File(p.join(tempDir.path, model.modelFileName));
+    if (!expectedModel.existsSync() && actualModel.existsSync()) {
+      await expectedModel.parent.create(recursive: true);
+      await actualModel.copy(expectedModel.path);
+    }
+  }
+
   Future<void> _downloadVadModel(
     OfflineAiAsrModel model,
+    _OfflineAiAsrDownloadSpec downloadSpec,
     Directory targetDir,
     void Function(OfflineAiAsrDownloadProgress progress)? onProgress,
   ) async {
-    final url = model.vadModelUrl;
-    final fileName = model.vadModelFileName;
-    if (url == null || fileName == null) return;
+    final fileName = model.vadModelFileName ?? downloadSpec.vadModelFileName;
+    if (downloadSpec.vadUrls.isEmpty || fileName == null) return;
 
     onProgress?.call(
       const OfflineAiAsrDownloadProgress(value: 0.88, label: 'Загрузка VAD-модели...'),
     );
 
     await _downloadSingleFile(
-      url,
+      downloadSpec.vadUrls,
       File(p.join(targetDir.path, fileName)),
       onProgress: onProgress,
       progressStart: 0.88,
@@ -492,6 +613,28 @@ class OfflineAiAsrService {
   }
 
   Future<void> _downloadArchive(
+    List<String> urls,
+    File target,
+    void Function(OfflineAiAsrDownloadProgress progress)? onProgress,
+  ) async {
+    Object? lastError;
+    for (final url in urls) {
+      try {
+        if (target.existsSync()) {
+          await target.delete();
+        }
+
+        await _downloadArchiveFromUrl(url, target, onProgress);
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw HttpException('Не удалось скачать модель распознавания: $lastError');
+  }
+
+  Future<void> _downloadArchiveFromUrl(
     String url,
     File target,
     void Function(OfflineAiAsrDownloadProgress progress)? onProgress,
@@ -505,6 +648,7 @@ class OfflineAiAsrService {
       throw HttpException('Не удалось скачать модель распознавания: HTTP ${response.statusCode}');
     }
 
+    await target.parent.create(recursive: true);
     final sink = target.openWrite();
     final total = response.contentLength;
     var received = 0;
@@ -531,6 +675,36 @@ class OfflineAiAsrService {
   }
 
   Future<void> _downloadSingleFile(
+    List<String> urls,
+    File target, {
+    void Function(OfflineAiAsrDownloadProgress progress)? onProgress,
+    double progressStart = 0,
+    double progressSpan = 1,
+  }) async {
+    Object? lastError;
+    for (final url in urls) {
+      try {
+        if (target.existsSync()) {
+          await target.delete();
+        }
+
+        await _downloadSingleFileFromUrl(
+          url,
+          target,
+          onProgress: onProgress,
+          progressStart: progressStart,
+          progressSpan: progressSpan,
+        );
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw HttpException('Failed to download file: $lastError');
+  }
+
+  Future<void> _downloadSingleFileFromUrl(
     String url,
     File target, {
     void Function(OfflineAiAsrDownloadProgress progress)? onProgress,

@@ -793,10 +793,18 @@ class ChatPageViewModel extends ChangeNotifier {
     setTextFieldValue(normalizedPrompt);
 
     final shouldSpeakReplies = Hive.box('settings').get('voiceReplyEnabled', defaultValue: true) as bool;
-    var pendingSpeech = '';
+    final pendingSpeechBuffer = StringBuffer();
     var consumedTextLength = 0;
     var queuedAnySpeech = false;
     Future<void> speechQueue = Future.value();
+
+    ({List<String> segments, String rest}) splitPendingSpeech({required bool force}) {
+      final split = _splitSpeakableSpeech(pendingSpeechBuffer.toString(), force: force);
+      pendingSpeechBuffer
+        ..clear()
+        ..write(split.rest);
+      return split;
+    }
 
     void queueSpeechSegment(String segment) {
       final normalizedSegment = segment.trim();
@@ -861,11 +869,10 @@ class ChatPageViewModel extends ChangeNotifier {
         return;
       }
 
-      pendingSpeech += content.substring(consumedTextLength);
+      pendingSpeechBuffer.write(content.substring(consumedTextLength));
       consumedTextLength = content.length;
 
-      final split = _splitSpeakableSpeech(pendingSpeech, force: false);
-      pendingSpeech = split.rest;
+      final split = splitPendingSpeech(force: false);
 
       for (final segment in split.segments) {
         queueSpeechSegment(segment);
@@ -884,12 +891,11 @@ class ChatPageViewModel extends ChangeNotifier {
       _voiceConversationAssistantEchoText = finalContent;
 
       if (finalContent.length > consumedTextLength) {
-        pendingSpeech += finalContent.substring(consumedTextLength);
+        pendingSpeechBuffer.write(finalContent.substring(consumedTextLength));
         consumedTextLength = finalContent.length;
       }
 
-      final split = _splitSpeakableSpeech(pendingSpeech, force: true);
-      pendingSpeech = split.rest;
+      final split = splitPendingSpeech(force: true);
 
       for (final segment in split.segments) {
         queueSpeechSegment(segment);

@@ -351,6 +351,17 @@ class ChatProvider extends ChangeNotifier {
     OllamaMessage? streamingMessage;
     OllamaMessage? receivedMessage;
     var didRecordFirstContentLatency = false;
+    var lastStreamNotifyAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+    void notifyStreamListeners({bool force = false}) {
+      final now = DateTime.now();
+      if (!force && now.difference(lastStreamNotifyAt) < const Duration(milliseconds: 50)) {
+        return;
+      }
+
+      lastStreamNotifyAt = now;
+      notifyListeners();
+    }
 
     await for (receivedMessage in stream) {
       // If the chat id is not in the active chat streams, it means the stream
@@ -371,6 +382,7 @@ class ChatProvider extends ChangeNotifier {
         continue;
       }
 
+      final isFirstVisibleMessage = streamingMessage == null;
       if (streamingMessage == null) {
         // Keep the first received message to add the content of the following messages
         streamingMessage = receivedMessage;
@@ -388,8 +400,8 @@ class ChatProvider extends ChangeNotifier {
         streamingMessage.appendStreamChunk(receivedMessage);
       }
 
-      notifyListeners();
       onAssistantMessageChanged?.call(streamingMessage);
+      notifyStreamListeners(force: isFirstVisibleMessage);
     }
 
     if (receivedMessage != null) {
@@ -399,6 +411,7 @@ class ChatProvider extends ChangeNotifier {
 
     // Update created at time to the current time when the stream is finished
     streamingMessage?.createdAt = DateTime.now();
+    notifyStreamListeners(force: true);
 
     return streamingMessage;
   }
@@ -564,6 +577,7 @@ class ChatProvider extends ChangeNotifier {
       includeAppContext: false,
     );
 
+    final titleBuffer = StringBuffer();
     var title = "";
     await for (final titleMessage in stream) {
       // Ignore empty initial messages, preventing empty title
@@ -571,7 +585,8 @@ class ChatProvider extends ChangeNotifier {
         continue;
       }
 
-      title += titleMessage.content;
+      titleBuffer.write(titleMessage.content);
+      title = titleBuffer.toString();
 
       // If <think> tag exists, do not stream chat title
       if (title.startsWith("<think>")) {

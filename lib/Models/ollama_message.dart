@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:path/path.dart' as path;
 import 'package:reins/Constants/constants.dart';
@@ -53,6 +54,9 @@ class OllamaMessage {
   int? promptEvalDuration;
   int? evalCount;
   int? evalDuration;
+
+  StringBuffer? _contentStreamBuffer;
+  StringBuffer? _thinkingStreamBuffer;
 
   OllamaMessage(
     this.content, {
@@ -187,11 +191,15 @@ class OllamaMessage {
 
   void appendStreamChunk(OllamaMessage message) {
     if (message.thinking != null && message.thinking!.isNotEmpty) {
-      thinking = (thinking ?? '') + message.thinking!;
+      final buffer = _thinkingStreamBuffer ??= StringBuffer(thinking ?? '');
+      buffer.write(message.thinking);
+      thinking = buffer.toString();
     }
 
     if (message.content.isNotEmpty) {
-      content += message.content;
+      final buffer = _contentStreamBuffer ??= StringBuffer(content);
+      buffer.write(message.content);
+      content = buffer.toString();
     }
 
     updateMetadataFrom(message);
@@ -200,7 +208,7 @@ class OllamaMessage {
   Future<List<String>?> _base64EncodeImages() async {
     if (images != null) {
       return await Future.wait(images!.map(
-        (file) async => base64Encode(await file.readAsBytes()),
+        (file) => Isolate.run(() => _base64EncodeImageFile(file.path)),
       ));
     }
 
@@ -370,6 +378,10 @@ class OllamaMessage {
       return null;
     }
   }
+}
+
+String _base64EncodeImageFile(String filePath) {
+  return base64Encode(File(filePath).readAsBytesSync());
 }
 
 class _StoredMessageParts {

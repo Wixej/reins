@@ -17,6 +17,8 @@ class OfflineAiAsrModel {
   final String archiveUrl;
   final String archiveRoot;
   final String modelFileName;
+  final String? vadModelUrl;
+  final String? vadModelFileName;
 
   const OfflineAiAsrModel({
     required this.id,
@@ -25,6 +27,8 @@ class OfflineAiAsrModel {
     required this.archiveUrl,
     required this.archiveRoot,
     required this.modelFileName,
+    this.vadModelUrl,
+    this.vadModelFileName,
   });
 }
 
@@ -54,6 +58,8 @@ class OfflineAiAsrService {
           'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-t-one-russian-2025-09-08.tar.bz2',
       archiveRoot: 'sherpa-onnx-streaming-t-one-russian-2025-09-08',
       modelFileName: 'model.onnx',
+      vadModelUrl: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx',
+      vadModelFileName: 'silero_vad.onnx',
     ),
   ];
 
@@ -65,6 +71,7 @@ class OfflineAiAsrService {
 
   sherpa.OnlineRecognizer? _recognizer;
   sherpa.OnlineStream? _stream;
+  sherpa.VoiceActivityDetector? _vad;
   StreamSubscription<Uint8List>? _audioSubscription;
   Timer? _maxListenTimer;
   Timer? _silenceTimer;
@@ -88,7 +95,15 @@ class OfflineAiAsrService {
     final model = modelById(modelId);
     final modelFile = File(await _modelPath(model));
     final tokensFile = File(await _tokensPath(model));
-    return modelFile.existsSync() && tokensFile.existsSync();
+    if (!modelFile.existsSync() || !tokensFile.existsSync()) {
+      return false;
+    }
+
+    if (model.vadModelFileName == null || model.vadModelUrl == null) {
+      return true;
+    }
+
+    return File(await _vadModelPath(model)).existsSync();
   }
 
   Future<void> downloadModel(
@@ -116,6 +131,7 @@ class OfflineAiAsrService {
         const OfflineAiAsrDownloadProgress(value: 0.78, label: 'Распаковка модели...'),
       );
       await _extractArchive(archiveFile, tempDir, model.archiveRoot);
+      await _downloadVadModel(model, tempDir, onProgress);
 
       if (modelDir.existsSync()) {
         await modelDir.delete(recursive: true);
@@ -139,6 +155,7 @@ class OfflineAiAsrService {
     final model = modelById(modelId);
     await cancelListening();
     _freeRecognizer();
+    _freeVad();
 
     final dir = Directory(await _modelDirPath(model));
     if (dir.existsSync()) {
@@ -166,6 +183,8 @@ class OfflineAiAsrService {
       _ensureBindingsInitialized();
       final recognizer = await _loadRecognizer(model);
       final stream = recognizer.createStream();
+      final vad = await _loadVad(model);
+      vad?.reset();
       _stream = stream;
       _isListening = true;
       _hasSpeech = false;
@@ -235,12 +254,14 @@ class OfflineAiAsrService {
 
     _stream?.free();
     _stream = null;
+    _vad?.reset();
     _isListening = false;
   }
 
   Future<void> dispose() async {
     await cancelListening();
     _freeRecognizer();
+    _freeVad();
     await _recorder.dispose();
   }
 
@@ -257,8 +278,9 @@ class OfflineAiAsrService {
     final samples = _pcm16ToFloat32(chunk);
     final rms = _rms(samples);
     final now = DateTime.now();
+    final hasVoice = _isVoiceDetected(samples, rms);
 
-    if (rms >= _silenceRmsThreshold) {
+    if (hasVoice) {
       _firstVoiceAt ??= now;
       _lastVoiceAt = now;
 
@@ -323,6 +345,7 @@ class OfflineAiAsrService {
     }
 
     _stream = null;
+    _vad?.reset();
     onStatusChanged?.call('done');
   }
 
@@ -341,14 +364,56 @@ class OfflineAiAsrService {
           modelType: 't-one-ctc',
         ),
         enableEndpoint: true,
-        rule1MinTrailingSilence: 2.8,
-        rule2MinTrailingSilence: 1.8,
+        rule1MinTrailingSilence: 1.5,
+        rule2MinTrailingSilence: 1.0,
         rule3MinUtteranceLength: 20,
       ),
     );
 
     _recognizer = recognizer;
     return recognizer;
+  }
+
+  Future<sherpa.VoiceActivityDetector?> _loadVad(OfflineAiAsrModel model) async {
+    if (_vad != null) return _vad;
+    if (model.vadModelFileName == null || model.vadModelUrl == null) return null;
+
+    final vadPath = await _vadModelPath(model);
+    if (!File(vadPath).existsSync()) return null;
+
+    _vad = sherpa.VoiceActivityDetector(
+      config: sherpa.VadModelConfig(
+        sileroVad: sherpa.SileroVadModelConfig(
+          model: vadPath,
+          threshold: 0.5,
+          minSilenceDuration: 0.35,
+          minSpeechDuration: 0.18,
+          maxSpeechDuration: 12.0,
+        ),
+        sampleRate: sampleRate,
+        numThreads: 1,
+        provider: 'cpu',
+        debug: false,
+      ),
+      bufferSizeInSeconds: 10,
+    );
+
+    return _vad;
+  }
+
+  bool _isVoiceDetected(Float32List samples, double rms) {
+    final vad = _vad;
+    if (vad == null) {
+      return rms >= _silenceRmsThreshold;
+    }
+
+    vad.acceptWaveform(samples);
+    final detected = vad.isDetected();
+    while (!vad.isEmpty()) {
+      vad.pop();
+    }
+
+    return detected || rms >= _silenceRmsThreshold;
   }
 
   Float32List _pcm16ToFloat32(Uint8List bytes) {
@@ -379,7 +444,8 @@ class OfflineAiAsrService {
     normalized = normalized[0].toUpperCase() + normalized.substring(1);
     if (finalResult && !RegExp(r'[.!?…]$').hasMatch(normalized)) {
       final lower = normalized.toLowerCase();
-      final isQuestion = RegExp(r'^(кто|что|где|когда|куда|откуда|почему|зачем|как|какой|какая|какое|какие|можно|надо|нужно|сколько)\b')
+      final isQuestion = RegExp(
+              r'^(кто|что|где|когда|куда|откуда|почему|зачем|как|какой|какая|какое|какие|можно|надо|нужно|сколько)\b')
           .hasMatch(lower);
       normalized += isQuestion ? '?' : '.';
     }
@@ -396,6 +462,33 @@ class OfflineAiAsrService {
   void _freeRecognizer() {
     _recognizer?.free();
     _recognizer = null;
+  }
+
+  void _freeVad() {
+    _vad?.free();
+    _vad = null;
+  }
+
+  Future<void> _downloadVadModel(
+    OfflineAiAsrModel model,
+    Directory targetDir,
+    void Function(OfflineAiAsrDownloadProgress progress)? onProgress,
+  ) async {
+    final url = model.vadModelUrl;
+    final fileName = model.vadModelFileName;
+    if (url == null || fileName == null) return;
+
+    onProgress?.call(
+      const OfflineAiAsrDownloadProgress(value: 0.88, label: 'Загрузка VAD-модели...'),
+    );
+
+    await _downloadSingleFile(
+      url,
+      File(p.join(targetDir.path, fileName)),
+      onProgress: onProgress,
+      progressStart: 0.88,
+      progressSpan: 0.1,
+    );
   }
 
   Future<void> _downloadArchive(
@@ -427,6 +520,48 @@ class OfflineAiAsrService {
             OfflineAiAsrDownloadProgress(
               value: progress * 0.78,
               label: 'Скачивание распознавания ${(progress * 100).round()}%',
+            ),
+          );
+        }
+      }
+    } finally {
+      await sink.close();
+      client.close();
+    }
+  }
+
+  Future<void> _downloadSingleFile(
+    String url,
+    File target, {
+    void Function(OfflineAiAsrDownloadProgress progress)? onProgress,
+    double progressStart = 0,
+    double progressSpan = 1,
+  }) async {
+    final client = http.Client();
+    final request = http.Request('GET', Uri.parse(url));
+    final response = await client.send(request);
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      client.close();
+      throw HttpException('Failed to download file: HTTP ${response.statusCode}');
+    }
+
+    await target.parent.create(recursive: true);
+    final sink = target.openWrite();
+    final total = response.contentLength;
+    var received = 0;
+
+    try {
+      await for (final chunk in response.stream) {
+        received += chunk.length;
+        sink.add(chunk);
+
+        if (total != null && total > 0) {
+          final progress = (received / total).clamp(0.0, 1.0);
+          onProgress?.call(
+            OfflineAiAsrDownloadProgress(
+              value: progressStart + progress * progressSpan,
+              label: 'Загрузка VAD-модели ${(progress * 100).round()}%',
             ),
           );
         }
@@ -490,5 +625,9 @@ class OfflineAiAsrService {
 
   Future<String> _tokensPath(OfflineAiAsrModel model) async {
     return p.join(await _modelDirPath(model), 'tokens.txt');
+  }
+
+  Future<String> _vadModelPath(OfflineAiAsrModel model) async {
+    return p.join(await _modelDirPath(model), model.vadModelFileName!);
   }
 }
